@@ -29,6 +29,8 @@ if sys.platform != "win32":
     print("OrphanGuard requires Windows.")
     sys.exit(1)
 
+_NO_WINDOW = subprocess.CREATE_NO_WINDOW
+
 # Prevent multiple instances
 _mutex = ctypes.windll.kernel32.CreateMutexW(None, False, "OrphanGuard_Mutex")
 if ctypes.windll.kernel32.GetLastError() == 183:
@@ -240,43 +242,58 @@ def get_file_description(exe_path):
 
 
 # ---------------------------------------------------------------------------
-# Startup with Windows (registry)
+# Startup with Windows (Task Scheduler — runs elevated)
 # ---------------------------------------------------------------------------
 
+_TASK_NAME = "OrphanGuard"
 _STARTUP_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
-_APP_NAME = "OrphanGuard"
 
 
 def get_startup_enabled():
-    import winreg
-
-    try:
-        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, _STARTUP_KEY, 0, winreg.KEY_READ)
-        winreg.QueryValueEx(key, _APP_NAME)
-        winreg.CloseKey(key)
-        return True
-    except (FileNotFoundError, OSError):
-        return False
+    r = subprocess.run(
+        ["schtasks", "/Query", "/TN", _TASK_NAME],
+        capture_output=True, timeout=5, creationflags=_NO_WINDOW,
+    )
+    return r.returncode == 0
 
 
 def set_startup_enabled(enable):
+    if enable:
+        exe = sys.executable
+        if exe.endswith("python.exe"):
+            exe = exe.replace("python.exe", "pythonw.exe")
+        script = str(Path(__file__).resolve())
+        subprocess.run(
+            [
+                "schtasks", "/Create",
+                "/TN", _TASK_NAME,
+                "/TR", f'"{exe}" "{script}"',
+                "/SC", "ONLOGON",
+                "/RL", "HIGHEST",
+                "/F",
+            ],
+            capture_output=True, timeout=10, creationflags=_NO_WINDOW,
+        )
+    else:
+        subprocess.run(
+            ["schtasks", "/Delete", "/TN", _TASK_NAME, "/F"],
+            capture_output=True, timeout=5, creationflags=_NO_WINDOW,
+        )
+    _remove_legacy_registry_entry()
+
+
+def _remove_legacy_registry_entry():
+    """Clean up the old HKCU\\Run entry if it exists from a prior version."""
     import winreg
 
     try:
         key = winreg.OpenKey(
             winreg.HKEY_CURRENT_USER, _STARTUP_KEY, 0, winreg.KEY_SET_VALUE
         )
-        if enable:
-            exe = sys.executable
-            if exe.endswith("python.exe"):
-                exe = exe.replace("python.exe", "pythonw.exe")
-            script = str(Path(__file__).resolve())
-            winreg.SetValueEx(key, _APP_NAME, 0, winreg.REG_SZ, f'"{exe}" "{script}"')
-        else:
-            try:
-                winreg.DeleteValue(key, _APP_NAME)
-            except FileNotFoundError:
-                pass
+        try:
+            winreg.DeleteValue(key, _TASK_NAME)
+        except FileNotFoundError:
+            pass
         winreg.CloseKey(key)
     except OSError:
         pass
@@ -488,7 +505,7 @@ class ProcessMonitor:
         try:
             r = subprocess.run(
                 ["taskkill", "/F", "/PID", str(pid)],
-                capture_output=True, timeout=5,
+                capture_output=True, timeout=5, creationflags=_NO_WINDOW,
             )
             return r.returncode == 0
         except Exception:
@@ -902,6 +919,173 @@ class StatusWindow:
 
 
 # ---------------------------------------------------------------------------
+# Diagnostics window
+# ---------------------------------------------------------------------------
+
+_CITRIX_PORTS = ("1494", "2598")
+_CITRIX_SERVICES = (
+    "ctxusbm", "CWAUpdaterService", "Citrix Encryption Service",
+    "cloaksvc", "CtxSFOSvc",
+)
+
+
+def _run_cmd(args, timeout=8):
+    try:
+        r = subprocess.run(
+            args, capture_output=True, text=True,
+            timeout=timeout, creationflags=_NO_WINDOW,
+        )
+        return r.stdout.strip()
+    except Exception as e:
+        return f"(error: {e})"
+
+
+def collect_diagnostics():
+    sections = []
+
+    # 1. Stale TCP connections on Citrix ICA/CGP ports
+    netstat = _run_cmd(["netstat", "-ano"])
+    citrix_lines = []
+    for line in netstat.splitlines():
+        if any(f":{p} " in line or f":{p}\t" in line for p in _CITRIX_PORTS):
+            citrix_lines.append(line.strip())
+    if citrix_lines:
+        sections.append(("Citrix TCP connections (ports 1494, 2598)", "\n".join(citrix_lines)))
+    else:
+        sections.append(("Citrix TCP connections (ports 1494, 2598)", "None found."))
+
+    # 2. Citrix-related Windows services
+    svc_lines = []
+    for svc in _CITRIX_SERVICES:
+        out = _run_cmd(["sc", "query", svc])
+        if "FAILED" in out or "does not exist" in out.lower():
+            svc_lines.append(f"  {svc}: not installed")
+        else:
+            state = "unknown"
+            for part in out.splitlines():
+                if "STATE" in part:
+                    state = part.split(":", 1)[-1].strip()
+                    break
+            svc_lines.append(f"  {svc}: {state}")
+    sections.append(("Citrix services", "\n".join(svc_lines)))
+
+    # 3. Citrix cache directories
+    cache_dirs = []
+    for var, sub in [("APPDATA", r"Citrix\SelfService"),
+                     ("LOCALAPPDATA", r"Citrix\SelfService")]:
+        base = Path.home()
+        if var == "APPDATA":
+            d = base / "AppData" / "Roaming" / "Citrix" / "SelfService"
+        else:
+            d = base / "AppData" / "Local" / "Citrix" / "SelfService"
+        if d.exists():
+            count = sum(1 for _ in d.rglob("*") if _.is_file())
+            cache_dirs.append(f"  {d}  ({count} files)")
+        else:
+            cache_dirs.append(f"  {d}  (not found)")
+    sections.append(("Citrix cache directories", "\n".join(cache_dirs)))
+
+    # 4. Kerberos tickets
+    klist = _run_cmd(["klist"])
+    ticket_count = klist.lower().count("server:") if klist else 0
+    sections.append(("Kerberos tickets", f"  {ticket_count} active ticket(s)\n\n{klist}"))
+
+    return sections
+
+
+class DiagnosticsWindow:
+    def __init__(self):
+        self.root = tk.Tk()
+        self.root.title("OrphanGuard — Citrix Diagnostics")
+        self.root.geometry("700x520")
+        self.root.resizable(True, True)
+
+        self.text = None
+        self._build()
+        self._run_diagnostics()
+        self.root.mainloop()
+
+    def _build(self):
+        f = ttk.Frame(self.root, padding=10)
+        f.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(f, text="Citrix Session Diagnostics", font=("Segoe UI", 12, "bold")).pack(anchor=tk.W, pady=(0, 6))
+
+        text_frame = ttk.Frame(f)
+        text_frame.pack(fill=tk.BOTH, expand=True)
+        self.text = tk.Text(text_frame, wrap=tk.WORD, font=("Consolas", 9))
+        sb = ttk.Scrollbar(text_frame, orient=tk.VERTICAL, command=self.text.yview)
+        self.text.configure(yscrollcommand=sb.set)
+        self.text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+
+        bf = ttk.Frame(f)
+        bf.pack(fill=tk.X, pady=(8, 0))
+        ttk.Button(bf, text="Flush DNS", command=self._flush_dns).pack(side=tk.LEFT, padx=2)
+        ttk.Button(bf, text="Purge Kerberos", command=self._purge_kerberos).pack(side=tk.LEFT, padx=2)
+        ttk.Button(bf, text="Clear Citrix Cache", command=self._clear_cache).pack(side=tk.LEFT, padx=2)
+        ttk.Button(bf, text="Reset Winsock", command=self._reset_winsock).pack(side=tk.LEFT, padx=2)
+        ttk.Button(bf, text="Copy to Clipboard", command=self._copy).pack(side=tk.RIGHT, padx=2)
+        ttk.Button(bf, text="Re-scan", command=self._run_diagnostics).pack(side=tk.RIGHT, padx=2)
+
+    def _run_diagnostics(self):
+        self.text.configure(state=tk.NORMAL)
+        self.text.delete("1.0", tk.END)
+        self.text.insert(tk.END, "Collecting diagnostics...\n")
+        self.root.update()
+
+        sections = collect_diagnostics()
+        self.text.delete("1.0", tk.END)
+        for title, body in sections:
+            self.text.insert(tk.END, f"=== {title} ===\n{body}\n\n")
+        self.text.configure(state=tk.DISABLED)
+
+    def _flush_dns(self):
+        out = _run_cmd(["ipconfig", "/flushdns"])
+        messagebox.showinfo("Flush DNS", out or "Done.", parent=self.root)
+        self._run_diagnostics()
+
+    def _purge_kerberos(self):
+        out = _run_cmd(["klist", "purge"])
+        messagebox.showinfo("Purge Kerberos", out or "Done.", parent=self.root)
+        self._run_diagnostics()
+
+    def _clear_cache(self):
+        cleared = 0
+        for sub in ("Roaming", "Local"):
+            d = Path.home() / "AppData" / sub / "Citrix" / "SelfService"
+            if d.exists():
+                for f in d.rglob("*"):
+                    if f.is_file():
+                        try:
+                            f.unlink()
+                            cleared += 1
+                        except OSError:
+                            pass
+        messagebox.showinfo("Clear Cache", f"Deleted {cleared} file(s).", parent=self.root)
+        self._run_diagnostics()
+
+    def _reset_winsock(self):
+        if not messagebox.askyesno(
+            "Reset Winsock",
+            "This runs 'netsh winsock reset' which may require a reboot to fully apply.\n\nContinue?",
+            parent=self.root,
+        ):
+            return
+        out = _run_cmd(["netsh", "winsock", "reset"])
+        messagebox.showinfo("Reset Winsock", out or "Done. A reboot may be needed.", parent=self.root)
+        self._run_diagnostics()
+
+    def _copy(self):
+        self.text.configure(state=tk.NORMAL)
+        content = self.text.get("1.0", tk.END)
+        self.text.configure(state=tk.DISABLED)
+        self.root.clipboard_clear()
+        self.root.clipboard_append(content)
+        self.root.update()
+
+
+# ---------------------------------------------------------------------------
 # Main application (tray icon + monitoring)
 # ---------------------------------------------------------------------------
 
@@ -952,6 +1136,7 @@ class OrphanGuard:
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("View Details…", self._do_details, default=True),
             pystray.MenuItem("Scan Now", self._do_scan),
+            pystray.MenuItem("Citrix Diagnostics…", self._do_diagnostics),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Settings…", self._do_settings),
             pystray.MenuItem("Start with Windows", self._do_toggle_startup, checked=lambda _: get_startup_enabled()),
@@ -999,6 +1184,9 @@ class OrphanGuard:
 
     def _do_details(self, icon=None, item=None):
         threading.Thread(target=lambda: StatusWindow(self.monitor), daemon=True).start()
+
+    def _do_diagnostics(self, icon=None, item=None):
+        threading.Thread(target=DiagnosticsWindow, daemon=True).start()
 
     def _do_settings(self, icon=None, item=None):
         threading.Thread(target=lambda: SettingsWindow(self.config, self._on_config_saved), daemon=True).start()
