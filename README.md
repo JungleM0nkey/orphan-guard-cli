@@ -74,6 +74,10 @@ A `config.json` is created automatically on first run with default profiles (all
 }
 ```
 
+## Codex integration
+
+Install the [OrphanGuard skill and read-only session-start hook](docs/codex-integration.md) to review Windows process buildup from Codex.
+
 ## License
 
 MIT
