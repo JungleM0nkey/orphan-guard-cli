@@ -1,0 +1,64 @@
+{
+  "scan_interval_seconds": 15,
+  "profiles": [
+    {
+      "name": "Microsoft Edge",
+      "enabled": false,
+      "indicator": {"process": "msedge.exe", "mode": "window"},
+      "targets": ["msedge.exe", "msedgewebview2.exe"]
+    },
+    {
+      "name": "Citrix Workspace",
+      "enabled": false,
+      "indicator": {"process": "SelfService.exe", "mode": "process"},
+      "targets": ["wfcrun32.exe", "Receiver.exe", "redirector.exe", "ssonsvr.exe", "concentr.exe", "wfica32.exe", "AuthManSvr.exe", "SelfServicePlugin.exe"]
+    },
+    {
+      "name": "Microsoft Teams",
+      "enabled": false,
+      "indicator": {"process": "ms-teams.exe", "mode": "window"},
+      "targets": ["ms-teams.exe"]
+    },
+    {
+      "name": "Zoom",
+      "enabled": false,
+      "indicator": {"process": "Zoom.exe", "mode": "window"},
+      "targets": ["Zoom.exe", "ZoomWebHost.exe", "CptHost.exe"]
+    },
+    {
+      "name": "Xbox Game Bar",
+      "enabled": false,
+      "indicator": {"process": "", "mode": "blocklist"},
+      "targets": ["GameBar.exe", "GameBarPresenceWriter.exe", "GameBarFTServer.exe"],
+      "auto_kill": false
+    },
+    {
+      "name": "Widgets",
+      "enabled": false,
+      "indicator": {"process": "", "mode": "blocklist"},
+      "targets": ["Widgets.exe", "WidgetService.exe"],
+      "auto_kill": false
+    },
+    {
+      "name": "Phone Link",
+      "enabled": false,
+      "indicator": {"process": "", "mode": "blocklist"},
+      "targets": ["PhoneExperienceHost.exe", "YourPhone.exe"],
+      "auto_kill": false
+    },
+    {
+      "name": "Cortana",
+      "enabled": false,
+      "indicator": {"process": "", "mode": "blocklist"},
+      "targets": ["Cortana.exe"],
+      "auto_kill": false
+    },
+    {
+      "name": "OneDrive",
+      "enabled": false,
+      "indicator": {"process": "", "mode": "blocklist"},
+      "targets": ["OneDrive.exe"],
+      "auto_kill": false
+    }
+  ]
+}
