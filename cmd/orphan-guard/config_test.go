@@ -15,6 +15,7 @@ func TestConfigRejectsUnsafeOrMalformedProfiles(t *testing.T) {
 		`{"profiles":[],"profilez":[]}`,
 		`{"profiles":[{"name":"","indicator":{"mode":"blocklist"},"targets":["worker.exe"]}]}`,
 		`{"profiles":[{"name":"A","enabled":"yes","indicator":{"mode":"blocklist"},"targets":["worker.exe"]}]}`,
+		`{"profiles":[{"name":"A","enabled":null,"indicator":{"mode":"blocklist"},"targets":["worker.exe"]}]}`,
 		`{"profiles":[{"name":"A","indicator":{"mode":"unknown"},"targets":["worker.exe"]}]}`,
 		`{"profiles":[{"name":"A","indicator":{"mode":"process","process":""},"targets":["worker.exe"]}]}`,
 		`{"profiles":[{"name":"A","indicator":{"mode":"blocklist"},"targets":[]}]}`,
@@ -29,6 +30,26 @@ func TestConfigRejectsUnsafeOrMalformedProfiles(t *testing.T) {
 				t.Fatal("unsafe or malformed config was accepted")
 			}
 		})
+	}
+}
+
+func TestOmittedAndFalseEnabledRetainTrayBehavior(t *testing.T) {
+	for _, tt := range []struct {
+		input string
+		want  int
+	}{
+		{`{"profiles":[{"name":"A","indicator":{"mode":"blocklist"},"targets":["worker.exe"]}]}`, 1},
+		{`{"profiles":[{"name":"A","enabled":false,"indicator":{"mode":"blocklist"},"targets":["worker.exe"]}]}`, 0},
+	} {
+		c, err := parseConfig([]byte(tt.input))
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := snapshot{Processes: []process{fixtureProcess(20, 0, "worker.exe")}, SelfPID: 10, SessionID: 1}
+		got, err := findCandidates(s, c.Profiles, scanOptions{Now: fixtureNow})
+		if err != nil || len(got) != tt.want {
+			t.Fatalf("config=%s, candidates=%v, err=%v; want %d candidates", tt.input, got, err, tt.want)
+		}
 	}
 }
 

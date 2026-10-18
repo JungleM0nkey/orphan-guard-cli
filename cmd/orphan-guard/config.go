@@ -33,9 +33,19 @@ func parseConfig(data []byte) (config, error) {
 	if c.Profiles == nil {
 		return c, errors.New("config must contain a profiles array")
 	}
+	// A pointer alone cannot distinguish an omitted enabled flag from explicit null.
+	var raw struct {
+		Profiles []struct{ Enabled json.RawMessage }
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return c, fmt.Errorf("invalid config: %w", err)
+	}
 	names := map[string]bool{}
 	for i := range c.Profiles {
 		pr := &c.Profiles[i]
+		if pr.Enabled == nil && len(raw.Profiles[i].Enabled) != 0 {
+			return c, fmt.Errorf("profile %q: enabled must be a boolean, not null", pr.Name)
+		}
 		pr.Name = strings.TrimSpace(pr.Name)
 		if pr.Name == "" || strings.IndexFunc(pr.Name, unicode.IsControl) >= 0 || names[strings.ToLower(pr.Name)] {
 			return c, fmt.Errorf("invalid or duplicate profile name %q", pr.Name)

@@ -110,6 +110,21 @@ func TestOverlappingProfilesDoNotDuplicateProcesses(t *testing.T) {
 	}
 }
 
+func TestUnknownIndicatorSessionSuppressesProfileCleanup(t *testing.T) {
+	for _, mode := range []string{"process", "window"} {
+		t.Run(mode, func(t *testing.T) {
+			app := fixtureProcess(30, 0, "app.exe")
+			app.SessionID = ^uint32(0)
+			s := snapshot{Processes: []process{fixtureProcess(20, 0, "worker.exe"), app}, Visible: map[uint32]bool{}, SelfPID: 10, SessionID: 1}
+			profiles := []profile{{Name: "App", Indicator: indicator{Process: "app.exe", Mode: mode}, Targets: []string{"worker.exe"}}}
+			got, err := findCandidates(s, profiles, scanOptions{Now: fixtureNow})
+			if err != nil || len(got) != 0 {
+				t.Fatalf("unverified indicator session permitted cleanup: candidates=%v, err=%v", got, err)
+			}
+		})
+	}
+}
+
 func TestUnknownOrDisabledProfileIsAnError(t *testing.T) {
 	disabled := false
 	profiles := []profile{{Name: "Disabled", Enabled: &disabled}}

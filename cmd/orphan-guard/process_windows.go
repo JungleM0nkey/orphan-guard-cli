@@ -62,7 +62,7 @@ func takeSnapshot() (snapshot, error) {
 	entry := syscall.ProcessEntry32{}
 	entry.Size = uint32(unsafe.Sizeof(entry))
 	for err = syscall.Process32First(h, &entry); err == nil; err = syscall.Process32Next(h, &entry) {
-		p := process{PID: entry.ProcessID, ParentPID: entry.ParentProcessID, Name: syscall.UTF16ToString(entry.ExeFile[:]), SessionID: ^uint32(0)}
+		p := process{PID: entry.ProcessID, ParentPID: entry.ParentProcessID, Name: syscall.UTF16ToString(entry.ExeFile[:]), SessionID: unknownSessionID}
 		if sid, sidErr := sessionID(p.PID); sidErr == nil {
 			p.SessionID = sid
 		}

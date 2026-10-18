@@ -7,6 +7,8 @@ import (
 	"time"
 )
 
+const unknownSessionID = ^uint32(0)
+
 type process struct {
 	PID         uint32    `json:"pid"`
 	ParentPID   uint32    `json:"parent_pid"`
@@ -116,11 +118,12 @@ func findCandidates(s snapshot, profiles []profile, opts scanOptions) ([]candida
 			}
 			running := false
 			for _, p := range s.Processes {
-				if p.SessionID == s.SessionID && strings.EqualFold(p.Name, pr.Indicator.Process) {
-					if mode == "process" || (mode == "window" && s.Visible[p.PID]) {
-						running = true
-						break
-					}
+				if mode == "blocklist" || !strings.EqualFold(p.Name, pr.Indicator.Process) {
+					continue
+				}
+				if p.SessionID == unknownSessionID || p.SessionID == s.SessionID && (mode == "process" || s.Visible[p.PID]) {
+					running = true
+					break
 				}
 			}
 			if running {
